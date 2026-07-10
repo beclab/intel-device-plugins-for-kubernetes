@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -205,6 +206,7 @@ type devicePlugin struct {
 	gpuDeviceReg     *regexp.Regexp
 	controlDeviceReg *regexp.Regexp
 	pciAddressReg    *regexp.Regexp
+	npuDeviceReg     *regexp.Regexp
 
 	scanTicker    *time.Ticker
 	scanDone      chan bool
@@ -219,6 +221,17 @@ type devicePlugin struct {
 	bypathDir      string
 	healthStatuses map[string]string
 
+	// NPU (accel) discovery. The standalone NPU device plugin is folded into
+	// the GPU plugin: NPU device nodes are attached to any container granted
+	// gpu.intel.com/i915.
+	npuSysfsDir string
+	npuDevfsDir string
+
+	// allocMutex guards npuDeviceSpecs which is written by the scan goroutine
+	// and read by the PostAllocate handler.
+	allocMutex     sync.Mutex
+	npuDeviceSpecs []pluginapi.DeviceSpec
+
 	// Note: If restarting the plugin with a new policy, the allocations for existing pods remain with old policy.
 	policy  preferredAllocationPolicyFunc
 	options cliOptions
@@ -232,10 +245,13 @@ func newDevicePlugin(sysfsDir, devFsDir string, options cliOptions) *devicePlugi
 		devFsRoot:        devFsDir,
 		devDriDir:        path.Join(devFsDir, "dri"),
 		bypathDir:        path.Join(devFsDir, "dri", "by-path"),
+		npuSysfsDir:      path.Join(sysfsDir, "class", "accel"),
+		npuDevfsDir:      path.Join(devFsDir, "accel"),
 		options:          options,
 		gpuDeviceReg:     regexp.MustCompile(gpuDeviceRE),
 		controlDeviceReg: regexp.MustCompile(controlDeviceRE),
 		pciAddressReg:    regexp.MustCompile(pciAddressRE),
+		npuDeviceReg:     regexp.MustCompile(npuDeviceRE),
 		scanTicker:       time.NewTicker(scanPeriod),
 		scanDone:         make(chan bool, 1), // buffered as we may send to it before Scan starts receiving from it
 		bypathFound:      true,
@@ -765,11 +781,40 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 		}
 	}
 
+	// Discover NPU (accel) devices and publish the latest snapshot so that
+	// PostAllocate can attach them to allocated GPU containers.
+	npuDeviceSpecs := dp.scanNPU()
+
+	dp.allocMutex.Lock()
+	dp.npuDeviceSpecs = npuDeviceSpecs
+	dp.allocMutex.Unlock()
+
 	return devTree, nil
 }
 
 func (dp *devicePlugin) Allocate(request *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
 	return nil, &dpapi.UseDefaultMethodError{}
+}
+
+// PostAllocate runs after the default server Allocate and attaches the NPU
+// (accel) device nodes discovered by scanNPU to every allocated container, so
+// that any container granted a GPU also gets access to the NPU. NPU discovery
+// lives in npu.go.
+func (dp *devicePlugin) PostAllocate(response *pluginapi.AllocateResponse) error {
+	dp.allocMutex.Lock()
+	defer dp.allocMutex.Unlock()
+
+	if len(dp.npuDeviceSpecs) == 0 {
+		return nil
+	}
+
+	for _, cresp := range response.ContainerResponses {
+		for i := range dp.npuDeviceSpecs {
+			cresp.Devices = append(cresp.Devices, &dp.npuDeviceSpecs[i])
+		}
+	}
+
+	return nil
 }
 
 func checkBasics(opts cliOptions) error {

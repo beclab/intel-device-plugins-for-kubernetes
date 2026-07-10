@@ -134,6 +134,8 @@ func (srv *server) ListAndWatch(empty *pluginapi.Empty, stream pluginapi.DeviceP
 	}
 
 	for srv.devices = range srv.updatesCh {
+		klog.Infof("[%s] devices updated (count=%d): %+v", srv.devType, len(srv.devices), srv.devices)
+
 		if err := srv.sendDevices(stream); err != nil {
 			return err
 		}
