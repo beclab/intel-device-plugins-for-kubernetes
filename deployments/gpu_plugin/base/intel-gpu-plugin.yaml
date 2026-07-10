@@ -55,6 +55,12 @@ spec:
         - name: sysfsdrm
           mountPath: /sys/class/drm
           readOnly: true
+        - name: devfsaccel
+          mountPath: /dev/accel
+          readOnly: true
+        - name: sysfsaccel
+          mountPath: /sys/class/accel
+          readOnly: true
         - name: kubeletsockets
           mountPath: /var/lib/kubelet/device-plugins
         - name: cdipath
@@ -66,6 +72,12 @@ spec:
       - name: sysfsdrm
         hostPath:
           path: /sys/class/drm
+      - name: devfsaccel
+        hostPath:
+          path: /dev/accel
+      - name: sysfsaccel
+        hostPath:
+          path: /sys/class/accel
       - name: kubeletsockets
         hostPath:
           path: /var/lib/kubelet/device-plugins

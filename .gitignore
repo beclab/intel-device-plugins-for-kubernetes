@@ -32,4 +32,5 @@ _work
 
 vendor/*
 licenses/*
+.idea/
 

@@ -43,7 +43,7 @@ ARG LDFLAGS="all=-w -s"
 ARG GOFLAGS="-trimpath"
 ARG GCFLAGS="all=-spectre=all"
 ARG ASMFLAGS="-spectre=all"
-ARG GOLICENSES_VERSION
+ARG GOLICENSES_VERSION="v1.6.0"
 ARG EP=/usr/local/bin/intel_gpu_device_plugin
 ARG CMD
 WORKDIR ${DIR}
