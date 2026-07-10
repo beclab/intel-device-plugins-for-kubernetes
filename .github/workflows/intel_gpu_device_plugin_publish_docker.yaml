@@ -22,5 +22,5 @@ jobs:
         with:
           push: true
           tags: beclab/intel-device-plugin:${{ github.event.inputs.tags }}
-          file: Dockerfile
+          file: build/docker/intel-gpu-plugin.Dockerfile
           platforms: linux/amd64
