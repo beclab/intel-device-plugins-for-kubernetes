@@ -16,6 +16,7 @@ package levelzeroservice
 
 import (
 	"context"
+	"time"
 
 	lz "github.com/intel/intel-device-plugins-for-kubernetes/cmd/internal/levelzero"
 	"google.golang.org/grpc"
@@ -26,6 +27,7 @@ import (
 
 type LevelzeroService interface {
 	Run(bool)
+	WaitForConnection(timeout time.Duration) bool
 	GetIntelIndices() ([]uint32, error)
 	GetDeviceHealth(bdfAddress string) (DeviceHealth, error)
 	GetDeviceTemperature(bdfAddress string) (DeviceTemperature, error)
@@ -106,6 +108,26 @@ func (l *levelzero) Run(keep bool) {
 
 func (l *levelzero) isClientReady() bool {
 	return l.client != nil
+}
+
+// WaitForConnection blocks until the Level-Zero client is connected and ready,
+// or the timeout elapses. It returns true if the client became ready in time.
+// It is used to avoid publishing fallback values on the first scan right after
+// startup, while the asynchronous gRPC connection is still being established.
+func (l *levelzero) WaitForConnection(timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+
+	for {
+		if l.isClientReady() {
+			return true
+		}
+
+		if !time.Now().Before(deadline) {
+			return false
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (l *levelzero) GetIntelIndices() ([]uint32, error) {

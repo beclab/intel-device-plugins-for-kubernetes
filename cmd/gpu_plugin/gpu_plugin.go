@@ -72,6 +72,11 @@ const (
 
 	levelzeroAffinityMaskEnvVar = "ZE_AFFINITY_MASK"
 
+	// levelzeroConnectTimeout bounds how long startup waits for the Level-Zero
+	// sidecar connection before the first scan, so the initial node-register
+	// annotation carries real VRAM sizes instead of sysfs fallback values.
+	levelzeroConnectTimeout = 5 * time.Second
+
 	// Period of device scans.
 	scanPeriod = 5 * time.Second
 
@@ -228,9 +233,14 @@ type devicePlugin struct {
 	npuDevfsDir string
 
 	// allocMutex guards npuDeviceSpecs which is written by the scan goroutine
-	// and read by the PostAllocate handler.
+	// and read by the PostAllocate handler. It also guards intelRegister,
+	// which is written by scan() and read by the node-register goroutine.
 	allocMutex     sync.Mutex
 	npuDeviceSpecs []pluginapi.DeviceSpec
+
+	// intelRegister is the latest per-card snapshot (uuid/kind/card/driver)
+	// gathered by scan(); published to the node annotation by runNodeRegister.
+	intelRegister []intelRegisterEntry
 
 	// Note: If restarting the plugin with a new policy, the allocations for existing pods remain with old policy.
 	policy  preferredAllocationPolicyFunc
@@ -728,6 +738,8 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 	devTree := dpapi.NewDeviceTree()
 	devProps := newDeviceProperties()
 
+	registerEntries := make([]intelRegisterEntry, 0)
+
 	for _, f := range dp.filterOutInvalidCards(files) {
 		name := f.Name()
 		cardPath := path.Join(dp.sysfsDrmDir, name)
@@ -742,6 +754,30 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 
 		if len(devSpecs) == 0 {
 			continue
+		}
+
+		// Snapshot per-card identity for the node-register annotation.
+		kind, kerr := gpuKindForCard(cardPath)
+		if kerr != nil {
+			klog.Warningf("node-register: skipping register entry for %s: %v", name, kerr)
+		} else {
+			model := gpuModel{}
+			if deviceID, derr := pciDeviceIDForCard(cardPath); derr == nil {
+				model = lookupGPUModel(deviceID)
+			} else {
+				klog.Warningf("node-register: can't read PCI device id for %s: %v", cardPath, derr)
+				continue
+			}
+
+			registerEntries = append(registerEntries, intelRegisterEntry{
+				kind:         kind,
+				card:         name,
+				driver:       devProps.driver(),
+				name:         model.name,
+				architecture: model.architecture,
+				codename:     model.codename,
+				mem:          dp.vramBytesForCard(cardPath, kind),
+			})
 		}
 
 		mounts, cdiDevices := dp.createMountsAndCDIDevices(cardPath, name, devSpecs)
@@ -787,6 +823,7 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 
 	dp.allocMutex.Lock()
 	dp.npuDeviceSpecs = npuDeviceSpecs
+	dp.intelRegister = registerEntries
 	dp.allocMutex.Unlock()
 
 	return devTree, nil
@@ -916,6 +953,12 @@ func main() {
 	// Setup Level-Zero service if enabled
 	setupLevelZeroService(plugin)
 
+	// Publish per-node Intel GPU register annotation (driver-aware i915/xe
+	// selection). Only meaningful for real sysfs scans, and best-effort: a
+	// missing NODE_NAME or in-cluster config just disables publishing.
+
+	go plugin.runNodeRegister(context.Background())
+
 	manager := dpapi.NewManager(namespace, plugin)
 	manager.Run()
 }
@@ -930,6 +973,15 @@ func setupLevelZeroService(plugin *devicePlugin) {
 	plugin.levelzeroService = levelzeroservice.NewLevelzero(gpulevelzero.DefaultUnixSocketPath)
 
 	go plugin.levelzeroService.Run(true)
+
+	// Wait (bounded) for the client to connect before the first scan runs, so
+	// the initial node-register annotation already carries real VRAM sizes
+	// instead of sysfs fallback values.
+	if plugin.levelzeroService.WaitForConnection(levelzeroConnectTimeout) {
+		klog.Info("levelzero client connected")
+	} else {
+		klog.Warningf("levelzero client not ready after %s; first scan may use fallback memory values", levelzeroConnectTimeout)
+	}
 }
 
 func setupXpumdService(plugin *devicePlugin) {
