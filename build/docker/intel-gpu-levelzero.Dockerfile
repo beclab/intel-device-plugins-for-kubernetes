@@ -24,7 +24,7 @@ ENV CGOFLAGS="-trimpath -mod=readonly -buildmode=pie"
 ENV GCFLAGS="all=-spectre=all"
 ENV ASMFLAGS="-spectre=all"
 ENV LDFLAGS="all=-linkmode=external -s -w"
-ARG GOLICENSES_VERSION
+ARG GOLICENSES_VERSION="v1.6.0"
 ARG CMD
 RUN mkdir /runtime
 RUN apt-get update && apt-get install --no-install-recommends -y jq libc6-dev ocl-icd-libopencl1 gcc ca-certificates && \

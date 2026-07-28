@@ -97,7 +97,14 @@ bool ze_try_initialize(void)
         return false;
     }
 
-    return zeInit(0) == ZE_RESULT_SUCCESS;
+    ze_result_t res = zeInit(0);
+    if (res != ZE_RESULT_SUCCESS) {
+        fprintf(stderr, "zeInit failed: 0x%X\n", res);
+
+        return false;
+    }
+
+    return true;
 }
 
 /// @brief Retrieve indices for Intel levelzero devices

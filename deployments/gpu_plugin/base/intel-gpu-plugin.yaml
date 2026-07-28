@@ -18,6 +18,7 @@ spec:
       labels:
         app: intel-gpu-plugin
     spec:
+      serviceAccountName: intel-gpu-plugin
       containers:
       - name: intel-gpu-plugin
         env:

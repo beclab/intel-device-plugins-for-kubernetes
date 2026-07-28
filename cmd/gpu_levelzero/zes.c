@@ -69,7 +69,14 @@ bool zes_try_initialize(void)
         return false;
     }
 
-    return zesInit(0) == ZE_RESULT_SUCCESS;
+    ze_result_t res = zesInit(0);
+    if (res != ZE_RESULT_SUCCESS) {
+        fprintf(stderr, "zesInit failed: 0x%X\n", res);
+
+        return false;
+    }
+
+    return true;
 }
 
 static ze_result_t enumerate_zes_devices(void)
@@ -234,15 +241,27 @@ uint64_t zes_device_memory_amount(char* bdf_address, uint32_t* error)
 
     uint32_t modcount = 0;
     uint64_t memory_size = 0;
-    if (!zesDeviceEnumMemoryModules(handle, &modcount, NULL) == ZE_RESULT_SUCCESS && modcount > 0) {
+    ze_result_t enum_res = zesDeviceEnumMemoryModules(handle, &modcount, NULL);
+    if (enum_res != ZE_RESULT_SUCCESS) {
+        print_log(LOG_WARNING, "zesDeviceEnumMemoryModules(count) failed for %s: 0x%X\n", bdf_address, enum_res);
+        *error = enum_res;
+    } else if (modcount == 0) {
+        print_log(LOG_WARNING, "no memory modules reported for %s\n", bdf_address);
+    } else {
         zes_mem_handle_t memhandles[modcount];
 
         if (zesDeviceEnumMemoryModules(handle, &modcount, memhandles) == ZE_RESULT_SUCCESS) {
             for (uint32_t mod_index = 0; mod_index < modcount; ++mod_index) {
-                zes_mem_state_t mem_state;
+                zes_mem_state_t mem_state = {
+                    .stype = ZES_STRUCTURE_TYPE_MEM_STATE,
+                    .pNext = NULL,
+                };
 
-                if (zesMemoryGetState(memhandles[mod_index], &mem_state) == ZE_RESULT_SUCCESS) {
+                ze_result_t state_res = zesMemoryGetState(memhandles[mod_index], &mem_state);
+                if (state_res == ZE_RESULT_SUCCESS) {
                     memory_size += mem_state.size;
+                } else {
+                    print_log(LOG_WARNING, "zesMemoryGetState failed for %s module %u: 0x%X\n", bdf_address, mod_index, state_res);
                 }
             }
         }

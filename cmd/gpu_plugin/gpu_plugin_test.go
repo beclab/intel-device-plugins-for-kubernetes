@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
 	"k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
@@ -70,6 +71,9 @@ type mockL0Service struct {
 func (m *mockL0Service) Run(keep bool) {
 }
 func (m *mockL0Service) Stop() {
+}
+func (m *mockL0Service) WaitForConnection(timeout time.Duration) bool {
+	return !m.fail
 }
 func (m *mockL0Service) GetIntelIndices() ([]uint32, error) {
 	if m.fail {
