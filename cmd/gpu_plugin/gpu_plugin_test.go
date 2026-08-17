@@ -428,7 +428,76 @@ func TestScan(t *testing.T) {
 				"card1/device/vendor":       []byte("0x8086"),
 				"card2/device/vendor":       []byte("0x8086"),
 			},
+			symlinkfiles: map[string]string{
+				"card1/device/physfn": "card0/device",
+				"card2/device/physfn": "card0/device",
+			},
 			devfsdirs:        []string{"card0", "card1", "card2"},
+			expectedI915Devs: 2,
+		},
+		{
+			name: "sriov-1-pf-and-2-vfs report pf",
+			sysfsdirs: []string{
+				"card0/device/drm/card0",
+				"card1/device/drm/card1",
+				"card2/device/drm/card2",
+			},
+			sysfsfiles: map[string][]byte{
+				"card0/device/vendor":       []byte("0x8086"),
+				"card0/device/sriov_numvfs": []byte("2"),
+				"card1/device/vendor":       []byte("0x8086"),
+				"card2/device/vendor":       []byte("0x8086"),
+			},
+			symlinkfiles: map[string]string{
+				"card1/device/physfn": "card0/device",
+				"card2/device/physfn": "card0/device",
+			},
+			devfsdirs:        []string{"card0", "card1", "card2"},
+			options:          cliOptions{sriovReport: sriovReportPF},
+			expectedI915Devs: 1,
+		},
+		{
+			name: "sriov-1-pf-and-2-vfs report all",
+			sysfsdirs: []string{
+				"card0/device/drm/card0",
+				"card1/device/drm/card1",
+				"card2/device/drm/card2",
+			},
+			sysfsfiles: map[string][]byte{
+				"card0/device/vendor":       []byte("0x8086"),
+				"card0/device/sriov_numvfs": []byte("2"),
+				"card1/device/vendor":       []byte("0x8086"),
+				"card2/device/vendor":       []byte("0x8086"),
+			},
+			symlinkfiles: map[string]string{
+				"card1/device/physfn": "card0/device",
+				"card2/device/physfn": "card0/device",
+			},
+			devfsdirs:        []string{"card0", "card1", "card2"},
+			options:          cliOptions{sriovReport: sriovReportAll},
+			expectedI915Devs: 3,
+		},
+		{
+			name: "sriov pf mode keeps discrete gpu and skips vfs",
+			sysfsdirs: []string{
+				"card0/device/drm/card0",
+				"card1/device/drm/card1",
+				"card2/device/drm/card2",
+				"card3/device/drm/card3",
+			},
+			sysfsfiles: map[string][]byte{
+				"card0/device/vendor":       []byte("0x8086"),
+				"card0/device/sriov_numvfs": []byte("2"),
+				"card1/device/vendor":       []byte("0x8086"),
+				"card2/device/vendor":       []byte("0x8086"),
+				"card3/device/vendor":       []byte("0x8086"),
+			},
+			symlinkfiles: map[string]string{
+				"card2/device/physfn": "card0/device",
+				"card3/device/physfn": "card0/device",
+			},
+			devfsdirs:        []string{"card0", "card1", "card2", "card3"},
+			options:          cliOptions{sriovReport: sriovReportPF},
 			expectedI915Devs: 2,
 		},
 		{
@@ -1383,6 +1452,26 @@ func TestCheckArgs(t *testing.T) {
 				monitoringMode:            "single",
 			},
 			expectErrStr: "invalid value for preferredAllocationPolicy",
+		},
+		{
+			name: "bad sriov-report",
+			options: cliOptions{
+				sharedDevNum:              1,
+				preferredAllocationPolicy: "none",
+				monitoringMode:            "single",
+				sriovReport:               "invalid",
+			},
+			expectErrStr: "invalid value for sriov-report",
+		},
+		{
+			name: "valid sriov-report pf",
+			options: cliOptions{
+				sharedDevNum:              1,
+				preferredAllocationPolicy: "none",
+				monitoringMode:            "single",
+				sriovReport:               sriovReportPF,
+			},
+			expectErrStr: "",
 		},
 		{
 			name: "health and xpumd at the same time",

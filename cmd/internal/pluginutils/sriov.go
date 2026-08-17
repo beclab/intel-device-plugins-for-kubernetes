@@ -26,6 +26,13 @@ func IsSriovPFwithVFs(pfpath string) bool {
 	return dat != "-1" && dat != "0"
 }
 
+// IsSriovVF returns true if the DRM card is an SR-IOV virtual function
+// (sysfs device/physfn exists and points at the PF).
+func IsSriovVF(cardPath string) bool {
+	_, err := os.Stat(path.Join(cardPath, "device/physfn"))
+	return err == nil
+}
+
 func GetSriovNumVFs(sysFSPath string) string {
 	dat, err := os.ReadFile(path.Join(sysFSPath, "device/sriov_numvfs"))
 	if err != nil {

@@ -289,6 +289,10 @@ func getPodArgs(gdp *devicepluginv1.GpuDevicePlugin) []string {
 		args = append(args, "-deny-ids", gdp.Spec.DenyIDs)
 	}
 
+	if gdp.Spec.SriovReport != "" {
+		args = append(args, "-sriov-report", gdp.Spec.SriovReport)
+	}
+
 	if gdp.Spec.ByPathMode != "" {
 		args = append(args, "-bypath", gdp.Spec.ByPathMode)
 	}
