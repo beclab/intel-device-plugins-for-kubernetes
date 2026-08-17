@@ -36,6 +36,7 @@ import (
 	"github.com/intel/intel-device-plugins-for-kubernetes/cmd/gpu_plugin/levelzeroservice"
 	"github.com/intel/intel-device-plugins-for-kubernetes/cmd/gpu_plugin/xpumdservice"
 	gpulevelzero "github.com/intel/intel-device-plugins-for-kubernetes/cmd/internal/levelzero"
+	"github.com/intel/intel-device-plugins-for-kubernetes/cmd/internal/pluginutils"
 	dpapi "github.com/intel/intel-device-plugins-for-kubernetes/pkg/deviceplugin"
 	cdispec "tags.cncf.io/container-device-interface/specs-go"
 )
@@ -70,6 +71,12 @@ const (
 	bypathOptionAll    = "all"
 	bypathOptionSingle = "single"
 
+	// sriov-report selects which SR-IOV GPU functions the plugin advertises.
+	// Host VF configuration is unchanged; this only affects Kubernetes resources.
+	sriovReportVFs = "vfs" // default: skip PF when VFs exist (historical behavior)
+	sriovReportPF  = "pf"  // skip VFs, advertise PF (and non-SR-IOV GPUs)
+	sriovReportAll = "all" // advertise PF and VFs
+
 	levelzeroAffinityMaskEnvVar = "ZE_AFFINITY_MASK"
 
 	// levelzeroConnectTimeout bounds how long startup waits for the Level-Zero
@@ -91,6 +98,7 @@ type cliOptions struct {
 	bypathMount               string
 	monitoringMode            string
 	xpumdEndpoint             string
+	sriovReport               string
 	sharedDevNum              int
 	globalTempLimit           int
 	memoryTempLimit           int
@@ -559,6 +567,30 @@ func (dp *devicePlugin) isCompatibleDevice(name string) bool {
 	return true
 }
 
+// skipDueToSriovReport decides whether a card should be omitted from the
+// Kubernetes device tree based on -sriov-report. Host SR-IOV state is not changed.
+func (dp *devicePlugin) skipDueToSriovReport(cardPath, name string) bool {
+	isVF := pluginutils.IsSriovVF(cardPath)
+	isPfWithVFs := pluginutils.IsSriovPFwithVFs(cardPath)
+
+	switch dp.options.sriovReport {
+	case sriovReportPF:
+		if isVF {
+			klog.V(4).Infof("Skipping VF %s (sriov-report=%s)", name, sriovReportPF)
+			return true
+		}
+	case sriovReportAll:
+		// Advertise PF and VFs.
+	case sriovReportVFs, "":
+		if isPfWithVFs {
+			klog.V(4).Infof("Skipping PF %s with VFs (sriov-report=%s)", name, sriovReportVFs)
+			return true
+		}
+	}
+
+	return false
+}
+
 func (dp *devicePlugin) devPathForDrmFile(drmFile string) (devPath string, err error) {
 	if dp.controlDeviceReg.MatchString(drmFile) {
 		//Skipping possible drm control node
@@ -746,7 +778,7 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 
 		devProps.fetch(cardPath)
 
-		if devProps.isPfWithVfs {
+		if dp.skipDueToSriovReport(cardPath, name) {
 			continue
 		}
 
@@ -757,18 +789,14 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 		}
 
 		// Snapshot per-card identity for the node-register annotation.
+		// Failures here must not skip advertising the GPU to kubelet.
 		kind, kerr := gpuKindForCard(cardPath)
 		if kerr != nil {
 			klog.Warningf("node-register: skipping register entry for %s: %v", name, kerr)
+		} else if deviceID, derr := pciDeviceIDForCard(cardPath); derr != nil {
+			klog.Warningf("node-register: can't read PCI device id for %s: %v", cardPath, derr)
 		} else {
-			model := gpuModel{}
-			if deviceID, derr := pciDeviceIDForCard(cardPath); derr == nil {
-				model = lookupGPUModel(deviceID)
-			} else {
-				klog.Warningf("node-register: can't read PCI device id for %s: %v", cardPath, derr)
-				continue
-			}
-
+			model := lookupGPUModel(deviceID)
 			registerEntries = append(registerEntries, intelRegisterEntry{
 				kind:         kind,
 				card:         name,
@@ -884,6 +912,13 @@ func checkBasics(opts cliOptions) error {
 			monitoringModeSplit, monitoringModeSingle))
 	}
 
+	switch opts.sriovReport {
+	case "", sriovReportVFs, sriovReportPF, sriovReportAll:
+	default:
+		return newArgError(fmt.Sprintf("invalid value for sriov-report, valid values: %s, %s, %s",
+			sriovReportVFs, sriovReportPF, sriovReportAll))
+	}
+
 	return nil
 }
 
@@ -937,10 +972,12 @@ func main() {
 	flag.StringVar(&opts.preferredAllocationPolicy, "allocation-policy", "none", "modes of allocating GPU devices: balanced, packed and none")
 	flag.StringVar(&opts.allowIDs, "allow-ids", "", "comma-separated list of device IDs to allow (e.g. 0x49c5,0x49c6)")
 	flag.StringVar(&opts.denyIDs, "deny-ids", "", "comma-separated list of device IDs to deny (e.g. 0x49c5,0x49c6)")
+	flag.StringVar(&opts.sriovReport, "sriov-report", sriovReportVFs, "which SR-IOV GPU functions to advertise: vfs (default, skip PF when VFs exist), pf (skip VFs, advertise PF), all (advertise PF and VFs). Does not change host VF configuration")
 
 	flag.Parse()
 
-	klog.V(1).Infof("GPU device plugin started with %s preferred allocation policy", opts.preferredAllocationPolicy)
+	klog.V(1).Infof("GPU device plugin started with %s preferred allocation policy, sriov-report=%s",
+		opts.preferredAllocationPolicy, opts.sriovReport)
 
 	plugin := newDevicePlugin(prefix+sysFsRoot, prefix+devFsRoot, opts)
 

@@ -46,6 +46,11 @@ type GpuDevicePluginSpec struct {
 	// Cannot be used together with AllowIDs.
 	DenyIDs string `json:"denyIDs,omitempty"`
 
+	// SriovReport selects which SR-IOV GPU functions are advertised to Kubernetes.
+	// Host VF configuration is not changed. Default is vfs (skip PF when VFs exist).
+	// +kubebuilder:validation:Enum=vfs;pf;all
+	SriovReport string `json:"sriovReport,omitempty"`
+
 	// PreferredAllocationPolicy sets the mode of allocating GPU devices on a node.
 	// See documentation for detailed description of the policies. Only valid when SharedDevNum > 1 is set.
 	// +kubebuilder:validation:Enum=balanced;packed;none

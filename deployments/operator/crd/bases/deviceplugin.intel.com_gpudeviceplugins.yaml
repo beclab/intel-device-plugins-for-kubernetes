@@ -124,6 +124,15 @@ spec:
                   the same GPU device.
                 minimum: 1
                 type: integer
+              sriovReport:
+                description: |-
+                  SriovReport selects which SR-IOV GPU functions are advertised to Kubernetes.
+                  Host VF configuration is not changed. Default is vfs (skip PF when VFs exist).
+                enum:
+                - vfs
+                - pf
+                - all
+                type: string
               tolerations:
                 description: Specialized nodes (e.g., with accelerators) can be Tainted
                   to make sure unwanted pods are not scheduled on them. Tolerations

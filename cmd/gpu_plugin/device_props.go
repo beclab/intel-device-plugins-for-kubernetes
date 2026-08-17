@@ -21,7 +21,6 @@ import (
 
 type DeviceProperties struct {
 	currentDriver string
-	isPfWithVfs   bool
 }
 
 func newDeviceProperties() *DeviceProperties {
@@ -29,8 +28,6 @@ func newDeviceProperties() *DeviceProperties {
 }
 
 func (d *DeviceProperties) fetch(cardPath string) {
-	d.isPfWithVfs = pluginutils.IsSriovPFwithVFs(cardPath)
-
 	driverName, err := pluginutils.ReadDeviceDriver(cardPath)
 	if err != nil {
 		klog.Warningf("card (%s) doesn't have driver, using default: %s", cardPath, deviceTypeDefault)
