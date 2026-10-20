@@ -44,6 +44,8 @@ const (
 	hamiBindPhaseAnnotation    = "hami.io/bind-phase"
 	hamiBindTimeAnnotation     = "hami.io/bind-time"
 	hamiAssignedNodeAnnotation = "hami.io/vgpu-node"
+	// MiB HAMi booked per container beyond its memory quota.
+	hamiMemoryReserveAnnotation = "gpu.bytetrade.io/vxpu-memory-reserve"
 
 	hamiBindAllocating = "allocating"
 	hamiBindSuccess    = "success"
@@ -196,6 +198,22 @@ func (dp *devicePlugin) allocateNextContainer(ctx context.Context, pod *corev1.P
 	return cresp, nil
 }
 
+// memoryReserve is what HAMi booked per container on top of the quota (MiB);
+// HAMi writes it next to the devices it assigns.
+func memoryReserve(pod *corev1.Pod) (int64, error) {
+	v, ok := pod.Annotations[hamiMemoryReserveAnnotation]
+	if !ok {
+		return 0, nil
+	}
+
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 {
+		return 0, errors.Errorf("invalid %s %q", hamiMemoryReserveAnnotation, v)
+	}
+
+	return n, nil
+}
+
 func (dp *devicePlugin) vgpuContainerResponse(pod *corev1.Pod, ctr *corev1.Container, devs []hamiDevice) (*pluginapi.ContainerAllocateResponse, error) {
 	cards := map[string]hamiCard{}
 	for _, c := range dp.hamiCardsSnapshot() {
@@ -204,6 +222,11 @@ func (dp *devicePlugin) vgpuContainerResponse(pod *corev1.Pod, ctr *corev1.Conta
 
 	cresp := &pluginapi.ContainerAllocateResponse{Envs: map[string]string{}}
 	limited := false
+
+	reserve, err := memoryReserve(pod)
+	if err != nil {
+		return nil, err
+	}
 
 	for i, d := range devs {
 		card, ok := cards[d.uuid]
@@ -222,7 +245,12 @@ func (dp *devicePlugin) vgpuContainerResponse(pod *corev1.Pod, ctr *corev1.Conta
 		cresp.Envs[fmt.Sprintf("VXPU_DEVICE_PCI_%d", i)] = card.bdf
 
 		if d.shareMode == shareModeMemSlicing {
-			cresp.Envs[fmt.Sprintf("CUDA_DEVICE_MEMORY_LIMIT_%d", i)] = fmt.Sprintf("%dm", d.memMiB)
+			quota := d.memMiB - reserve
+			if quota <= 0 {
+				return nil, errors.Errorf("card %s: booked %d MiB does not cover the %d MiB reserve", d.uuid, d.memMiB, reserve)
+			}
+
+			cresp.Envs[fmt.Sprintf("CUDA_DEVICE_MEMORY_LIMIT_%d", i)] = fmt.Sprintf("%dm", quota)
 			limited = true
 		}
 	}

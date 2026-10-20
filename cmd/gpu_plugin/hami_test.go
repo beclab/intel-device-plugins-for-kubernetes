@@ -239,10 +239,11 @@ func newAllocFixture(t *testing.T, toAllocate string, limits corev1.ResourceList
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "app", Name: "llama", UID: "uid-1",
 			Annotations: map[string]string{
-				hamiToAllocateAnnotation:   toAllocate,
-				hamiBindPhaseAnnotation:    hamiBindAllocating,
-				hamiBindTimeAnnotation:     "1",
-				hamiAssignedNodeAnnotation: testNode,
+				hamiToAllocateAnnotation:    toAllocate,
+				hamiBindPhaseAnnotation:     hamiBindAllocating,
+				hamiBindTimeAnnotation:      "1",
+				hamiAssignedNodeAnnotation:  testNode,
+				hamiMemoryReserveAnnotation: "256",
 			},
 		},
 		Spec: corev1.PodSpec{NodeName: testNode, Containers: []corev1.Container{
@@ -302,7 +303,7 @@ func mountFor(cresp *v1beta1.ContainerAllocateResponse, containerPath string) *v
 
 func TestHAMIAllocateMemorySlice(t *testing.T) {
 	uuid := hamiCardUUID(testNode, testBDF)
-	f := newAllocFixture(t, ";"+uuid+",Intel,4096,0,1:;", nil)
+	f := newAllocFixture(t, ";"+uuid+",Intel,4352,0,1:;", nil)
 
 	resp, err := f.allocate()
 	if err != nil {
@@ -377,6 +378,9 @@ func TestHAMIAllocateFailureReleasesLock(t *testing.T) {
 		"also requests NVIDIA": func(t *testing.T) allocFixture {
 			return newAllocFixture(t, ";"+hamiCardUUID(testNode, testBDF)+",Intel,4096,0,1:;",
 				corev1.ResourceList{nvidiaGPUResource: resource.MustParse("1")})
+		},
+		"booked memory below the reserve": func(t *testing.T) allocFixture {
+			return newAllocFixture(t, ";"+hamiCardUUID(testNode, testBDF)+",Intel,256,0,1:;", nil)
 		},
 		"quota without libvxpu": func(t *testing.T) allocFixture {
 			f := newAllocFixture(t, ";"+hamiCardUUID(testNode, testBDF)+",Intel,4096,0,1:;", nil)

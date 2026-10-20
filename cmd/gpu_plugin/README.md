@@ -242,7 +242,9 @@ Each discrete card is advertised `-shared-dev-num` times as `intel.com/vgpu`, an
   Exclusive;
 - in Allocate, takes the cards HAMi chose from `hami.io/intel-vgpu-devices-to-allocate` instead of
   the device IDs kubelet passed, mounts libvxpu with `/etc/ld.so.preload`, pins the container to its
-  cards (`VXPU_DEVICE_PCI_<i>`), sets `CUDA_DEVICE_MEMORY_LIMIT_<i>` for a memory slice, and keeps
+  cards (`VXPU_DEVICE_PCI_<i>`), sets `CUDA_DEVICE_MEMORY_LIMIT_<i>` for a memory slice (the memory
+  HAMi booked minus the per-container reserve it recorded in
+  `gpu.bytetrade.io/vxpu-memory-reserve`), and keeps
   the container's ledger in `<vxpu-host-dir>/containers/<pod UID>_<container>`. A container setting
   `CUDA_DISABLE_CONTROL=true` gets no preload. A container that also requests `nvidia.com/gpu` is
   rejected.
