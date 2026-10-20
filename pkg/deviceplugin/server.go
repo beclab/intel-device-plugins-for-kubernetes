@@ -258,8 +258,7 @@ func (srv *server) getState() serverState {
 
 // setupAndServe binds given gRPC server to device manager, starts it and registers it with kubelet.
 func (srv *server) setupAndServe(namespace string, devicePluginPath string, kubeletSocket string) error {
-	resourceName := namespace + "/" + srv.devType
-	pluginPrefix := namespace + "-" + srv.devType
+	resourceName, pluginPrefix := resourceNameAndPrefix(namespace, srv.devType)
 	srv.setState(serving)
 
 	for srv.getState() == serving {
@@ -319,6 +318,17 @@ func (srv *server) setupAndServe(namespace string, devicePluginPath string, kube
 	}
 
 	return nil
+}
+
+// resourceNameAndPrefix returns the extended resource name and socket prefix
+// of a device type. A device type carrying its own domain, e.g.
+// "intel.com/vgpu", is registered under that name instead of namespace.
+func resourceNameAndPrefix(namespace, devType string) (string, string) {
+	if strings.Contains(devType, "/") {
+		return devType, strings.ReplaceAll(devType, "/", "-")
+	}
+
+	return namespace + "/" + devType, namespace + "-" + devType
 }
 
 func watchFile(file string) error {

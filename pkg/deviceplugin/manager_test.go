@@ -288,6 +288,64 @@ func TestHandleUpdate(t *testing.T) {
 	}
 }
 
+type resourceAllocatorStub struct {
+	devicePluginStub
+	allocated []string
+}
+
+func (s *resourceAllocatorStub) AllocateResource(devType string, _ *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+	s.allocated = append(s.allocated, devType)
+
+	return &pluginapi.AllocateResponse{}, nil
+}
+
+func TestHandleUpdateResourceAllocator(t *testing.T) {
+	plugin := &resourceAllocatorStub{}
+	allocators := map[string]allocateFunc{}
+	mgr := Manager{
+		devicePlugin: plugin,
+		servers:      map[string]devicePluginServer{},
+		createServer: func(devType string, _ postAllocateFunc, _ preStartContainerFunc, _ getPreferredAllocationFunc, allocate allocateFunc) devicePluginServer {
+			allocators[devType] = allocate
+
+			return &serverStub{}
+		},
+	}
+
+	mgr.handleUpdate(updateInfo{Added: map[string]map[string]DeviceInfo{
+		"xe":             {"card0-0": {state: pluginapi.Healthy}},
+		"intel.com/vgpu": {"vgpu-card1-0": {state: pluginapi.Healthy}},
+	}})
+
+	for _, devType := range []string{"intel.com/vgpu", "xe"} {
+		if allocators[devType] == nil {
+			t.Fatalf("no allocate function for %s", devType)
+		}
+
+		if _, err := allocators[devType](&pluginapi.AllocateRequest{}); err != nil {
+			t.Fatalf("allocate %s: %v", devType, err)
+		}
+	}
+
+	if len(plugin.allocated) != 2 || plugin.allocated[0] != "intel.com/vgpu" || plugin.allocated[1] != "xe" {
+		t.Errorf("allocations were for %v, want [intel.com/vgpu xe]", plugin.allocated)
+	}
+}
+
+func TestResourceNameAndPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		devType, name, prefix string
+	}{
+		{"xe", "gpu.intel.com/xe", "gpu.intel.com-xe"},
+		{"intel.com/vgpu", "intel.com/vgpu", "intel.com-vgpu"},
+	} {
+		name, prefix := resourceNameAndPrefix("gpu.intel.com", tc.devType)
+		if name != tc.name || prefix != tc.prefix {
+			t.Errorf("%s: got %s %s, want %s %s", tc.devType, name, prefix, tc.name, tc.prefix)
+		}
+	}
+}
+
 func TestRun(t *testing.T) {
 	mgr := NewManager("testnamespace", &devicePluginStub{})
 	mgr.createServer = func(string, postAllocateFunc, preStartContainerFunc, getPreferredAllocationFunc, allocateFunc) devicePluginServer {
