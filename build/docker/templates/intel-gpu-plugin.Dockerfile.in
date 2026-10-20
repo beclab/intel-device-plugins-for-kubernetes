@@ -1,7 +1,31 @@
 #define _ENTRYPOINT_ /usr/local/bin/intel_gpu_device_plugin
 ARG CMD=gpu_plugin
+## VXPU_BUILDER is the HAMi-core release builder image (beclab/vxpu_builder:<tag>)
+## that carries the tested /vxpu/libvxpu.so installed by -hami. There is no
+## default: the library tag has to be chosen for every build.
+ARG VXPU_BUILDER
 
-#include "default_plugin.docker"
+#include "final_base.docker"
+#include "golang_base.docker"
+
+FROM ${VXPU_BUILDER} AS vxpu
+
+FROM ${GOLANG_BASE} AS builder
+
+#include "default_args.docker"
+
+ARG EP=_ENTRYPOINT_
+ARG CMD
+
+#include "default_build.docker"
+
+FROM ${FINAL_BASE}
+
+#include "default_end.docker"
+
+COPY --from=vxpu /vxpu/libvxpu.so /usr/local/share/vxpu/libvxpu.so
+
+#include "default_labels.docker"
 
 LABEL name='intel-gpu-plugin'
 LABEL summary='Intel® GPU device plugin for Kubernetes'

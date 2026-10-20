@@ -30,6 +30,8 @@ import (
 
 	"github.com/pkg/errors"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	pluginapi "k8s.io/kubelet/pkg/apis/deviceplugin/v1beta1"
 
@@ -99,6 +101,9 @@ type cliOptions struct {
 	monitoringMode            string
 	xpumdEndpoint             string
 	sriovReport               string
+	vxpuLib                   string
+	vxpuHostDir               string
+	vxpuLogLevel              string
 	sharedDevNum              int
 	globalTempLimit           int
 	memoryTempLimit           int
@@ -106,6 +111,7 @@ type cliOptions struct {
 	enableMonitoring          bool
 	wslScan                   bool
 	healthManagement          bool
+	hami                      bool
 }
 
 type argError struct {
@@ -249,6 +255,13 @@ type devicePlugin struct {
 	// intelRegister is the latest per-card snapshot (uuid/kind/card/driver)
 	// gathered by scan(); published to the node annotation by runNodeRegister.
 	intelRegister []intelRegisterEntry
+
+	// HAMi mode (-hami): the discrete cards of the latest scan, the node they
+	// are on, and the installed libvxpu ("" when it could not be installed).
+	hamiCards   []hamiCard
+	nodeName    string
+	kubeClient  kubernetes.Interface
+	vxpuHostLib string
 
 	// Note: If restarting the plugin with a new policy, the allocations for existing pods remain with old policy.
 	policy  preferredAllocationPolicyFunc
@@ -511,7 +524,8 @@ func (dp *devicePlugin) sysFsGpuScan(notifier dpapi.Notifier) error {
 		deviceTypeI915: 0, deviceTypeXe: 0,
 		deviceTypeXe + monitorSuffix:   0,
 		deviceTypeI915 + monitorSuffix: 0,
-		monitorResourceCombined:        0}
+		monitorResourceCombined:        0,
+		vgpuResource:                   0}
 
 	for {
 		devTree, err := dp.scan()
@@ -771,6 +785,7 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 	devProps := newDeviceProperties()
 
 	registerEntries := make([]intelRegisterEntry, 0)
+	hamiCards := make([]hamiCard, 0)
 
 	for _, f := range dp.filterOutInvalidCards(files) {
 		name := f.Name()
@@ -790,13 +805,19 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 
 		// Snapshot per-card identity for the node-register annotation.
 		// Failures here must not skip advertising the GPU to kubelet.
+		var (
+			model gpuModel
+			mem   uint64
+		)
+
 		kind, kerr := gpuKindForCard(cardPath)
 		if kerr != nil {
 			klog.Warningf("node-register: skipping register entry for %s: %v", name, kerr)
 		} else if deviceID, derr := pciDeviceIDForCard(cardPath); derr != nil {
 			klog.Warningf("node-register: can't read PCI device id for %s: %v", cardPath, derr)
 		} else {
-			model := lookupGPUModel(deviceID)
+			model = lookupGPUModel(deviceID)
+			mem = dp.vramBytesForCard(cardPath, kind)
 			registerEntries = append(registerEntries, intelRegisterEntry{
 				kind:         kind,
 				card:         name,
@@ -804,7 +825,7 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 				name:         model.name,
 				architecture: model.architecture,
 				codename:     model.codename,
-				mem:          dp.vramBytesForCard(cardPath, kind),
+				mem:          mem,
 			})
 		}
 
@@ -812,11 +833,35 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 
 		health := dp.healthStatusForCard(cardPath)
 
-		deviceInfo := dpapi.NewDeviceInfo(health, devSpecs, mounts, nil, nil, cdiDevices)
+		bdf, hasBDF := "", false
+		if dp.options.hami && kind == gpuKindDiscrete {
+			bdf, hasBDF = bdfForCard(cardPath)
+		}
 
-		for i := 0; i < dp.options.sharedDevNum; i++ {
-			devID := fmt.Sprintf("%s-%d", name, i)
-			devTree.AddDevice(devProps.driver(), devID, deviceInfo)
+		if hasBDF {
+			hamiCards = append(hamiCards, hamiCard{
+				uuid:     hamiCardUUID(dp.nodeName, bdf),
+				card:     name,
+				bdf:      bdf,
+				model:    hamiModelType(model.name),
+				memMiB:   int64(mem >> 20),
+				numa:     numaNodeForCard(cardPath),
+				index:    len(hamiCards),
+				healthy:  health == pluginapi.Healthy,
+				devSpecs: devSpecs,
+				mounts:   mounts,
+			})
+
+			deviceInfo := dpapi.NewDeviceInfo(health, devSpecs, mounts, nil, nil, nil)
+			for i := 0; i < dp.options.sharedDevNum; i++ {
+				devTree.AddDevice(vgpuResource, fmt.Sprintf("vgpu-%s-%d", name, i), deviceInfo)
+			}
+		} else {
+			deviceInfo := dpapi.NewDeviceInfo(health, devSpecs, mounts, nil, nil, cdiDevices)
+			for i := 0; i < dp.options.sharedDevNum; i++ {
+				devID := fmt.Sprintf("%s-%d", name, i)
+				devTree.AddDevice(devProps.driver(), devID, deviceInfo)
+			}
 		}
 
 		if dp.options.enableMonitoring {
@@ -852,6 +897,7 @@ func (dp *devicePlugin) scan() (dpapi.DeviceTree, error) {
 	dp.allocMutex.Lock()
 	dp.npuDeviceSpecs = npuDeviceSpecs
 	dp.intelRegister = registerEntries
+	dp.hamiCards = hamiCards
 	dp.allocMutex.Unlock()
 
 	return devTree, nil
@@ -935,6 +981,10 @@ func checkArgs(opts cliOptions) error {
 		if opts.healthManagement || opts.xpumdEndpoint != "" {
 			return newArgError("health management is not supported within WSL.")
 		}
+
+		if opts.hami {
+			return newArgError("HAMi mode is not supported within WSL.")
+		}
 	}
 
 	if opts.healthManagement && opts.xpumdEndpoint != "" {
@@ -973,6 +1023,10 @@ func main() {
 	flag.StringVar(&opts.allowIDs, "allow-ids", "", "comma-separated list of device IDs to allow (e.g. 0x49c5,0x49c6)")
 	flag.StringVar(&opts.denyIDs, "deny-ids", "", "comma-separated list of device IDs to deny (e.g. 0x49c5,0x49c6)")
 	flag.StringVar(&opts.sriovReport, "sriov-report", sriovReportVFs, "which SR-IOV GPU functions to advertise: vfs (default, skip PF when VFs exist), pf (skip VFs, advertise PF), all (advertise PF and VFs). Does not change host VF configuration")
+	flag.BoolVar(&opts.hami, "hami", false, "advertise discrete GPUs as "+vgpuResource+" for the HAMi scheduler and inject libvxpu into the containers it places on them")
+	flag.StringVar(&opts.vxpuLib, "vxpu-lib", "/usr/local/share/vxpu/libvxpu.so", "libvxpu shipped in the plugin image, installed into -vxpu-host-dir (HAMi mode)")
+	flag.StringVar(&opts.vxpuHostDir, "vxpu-host-dir", "/usr/local/vxpu", "host directory for libvxpu and the per-container ledgers; must be mounted at the same path in the plugin container (HAMi mode)")
+	flag.StringVar(&opts.vxpuLogLevel, "vxpu-log-level", "", "LIBCUDA_LOG_LEVEL set in containers using libvxpu (HAMi mode)")
 
 	flag.Parse()
 
@@ -995,6 +1049,8 @@ func main() {
 	// missing NODE_NAME or in-cluster config just disables publishing.
 
 	go plugin.runNodeRegister(context.Background())
+
+	setupHAMI(plugin)
 
 	manager := dpapi.NewManager(namespace, plugin)
 	manager.Run()
@@ -1019,6 +1075,36 @@ func setupLevelZeroService(plugin *devicePlugin) {
 	} else {
 		klog.Warningf("levelzero client not ready after %s; first scan may use fallback memory values", levelzeroConnectTimeout)
 	}
+}
+
+// setupHAMI is fatal on a missing node name or API access: without them no
+// pod placed on a discrete card by HAMi could be allocated.
+func setupHAMI(plugin *devicePlugin) {
+	if !plugin.options.hami {
+		return
+	}
+
+	plugin.nodeName = os.Getenv(nodeNameEnvVar)
+	if plugin.nodeName == "" {
+		klog.Fatalf("-hami needs the %s env", nodeNameEnvVar)
+	}
+
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		klog.Fatalf("-hami needs in-cluster API access: %v", err)
+	}
+
+	if plugin.kubeClient, err = kubernetes.NewForConfig(cfg); err != nil {
+		klog.Fatalf("-hami: can't build a clientset: %v", err)
+	}
+
+	if plugin.vxpuHostLib, err = installVXPU(plugin.options.vxpuLib, plugin.options.vxpuHostDir); err != nil {
+		klog.Warningf("hami: libvxpu not installed, cards offer Exclusive only and are not isolated: %v", err)
+	} else {
+		klog.Infof("hami: libvxpu installed at %s", plugin.vxpuHostLib)
+	}
+
+	go plugin.runHAMIRegister(context.Background())
 }
 
 func setupXpumdService(plugin *devicePlugin) {
