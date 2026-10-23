@@ -147,6 +147,14 @@ type Allocator interface {
 	Allocate(*pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error)
 }
 
+// ResourceAllocator is an optional interface implemented by device plugins
+// whose device types are allocated differently. It takes precedence over
+// Allocator and is told which device type the request is for; returning
+// UseDefaultMethodError falls back to the default server allocation.
+type ResourceAllocator interface {
+	AllocateResource(devType string, rqt *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error)
+}
+
 // PostAllocator is an optional interface implemented by device plugins.
 type PostAllocator interface {
 	// PostAllocate modifies responses returned by Allocate() by e.g.

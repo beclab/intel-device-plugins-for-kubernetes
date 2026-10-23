@@ -5,6 +5,9 @@ on:
       inputs:
         tags:
           description: 'Release Tags'
+        vxpu_builder_tag:
+          description: 'beclab/vxpu_builder tag that provides libvxpu.so'
+          required: true
 
 jobs:
   publish_dockerhub_amd64:
@@ -23,4 +26,6 @@ jobs:
           push: true
           tags: beclab/intel-device-plugin:${{ github.event.inputs.tags }}
           file: build/docker/intel-gpu-plugin.Dockerfile
+          build-args: |
+            VXPU_BUILDER=beclab/vxpu_builder:${{ github.event.inputs.vxpu_builder_tag }}
           platforms: linux/amd64

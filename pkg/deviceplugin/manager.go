@@ -134,7 +134,12 @@ func (m *Manager) handleUpdate(update updateInfo) {
 			getPreferredAllocation = preferredAllocator.GetPreferredAllocation
 		}
 
-		if allocator, ok := m.devicePlugin.(Allocator); ok {
+		if allocator, ok := m.devicePlugin.(ResourceAllocator); ok {
+			dt := devType
+			allocate = func(rqt *pluginapi.AllocateRequest) (*pluginapi.AllocateResponse, error) {
+				return allocator.AllocateResource(dt, rqt)
+			}
+		} else if allocator, ok := m.devicePlugin.(Allocator); ok {
 			allocate = allocator.Allocate
 		}
 

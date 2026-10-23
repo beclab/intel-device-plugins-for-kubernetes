@@ -15,6 +15,10 @@
 ## limitations under the License.
 ###
 ARG CMD=gpu_plugin
+## VXPU_BUILDER is the HAMi-core release builder image (beclab/vxpu_builder:<tag>)
+## that carries the tested /vxpu/libvxpu.so installed by -hami. There is no
+## default: the library tag has to be chosen for every build.
+ARG VXPU_BUILDER
 ## FINAL_BASE can be used to configure the base image of the final image.
 ##
 ## This is used in two ways:
@@ -36,6 +40,7 @@ ARG FINAL_BASE=registry.access.redhat.com/ubi9-micro:latest
 ## The main branch defaults to using the latest Golang base image.
 ARG GOLANG_BASE=golang:1.26-trixie
 ###
+FROM ${VXPU_BUILDER} AS vxpu
 FROM ${GOLANG_BASE} AS builder
 ARG DIR=/intel-device-plugins-for-kubernetes
 ARG GO111MODULE=on
@@ -59,6 +64,7 @@ RUN install -D ${DIR}/LICENSE /install_root/licenses/intel-device-plugins-for-ku
 FROM ${FINAL_BASE}
 COPY --from=builder /install_root /
 ENTRYPOINT ["/usr/local/bin/intel_gpu_device_plugin"]
+COPY --from=vxpu /vxpu/libvxpu.so /usr/local/share/vxpu/libvxpu.so
 LABEL vendor='Intel®'
 LABEL org.opencontainers.image.source='https://github.com/intel/intel-device-plugins-for-kubernetes'
 LABEL maintainer="Intel®"

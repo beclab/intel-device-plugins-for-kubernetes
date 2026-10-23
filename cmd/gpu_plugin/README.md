@@ -68,6 +68,10 @@ For workloads on different KMDs, see [KMD and UMD](#kmd-and-umd).
 | -allocation-policy | string | none | 3 possible values: balanced, packed, none. For shared-dev-num > 1: _balanced_ mode spreads workloads among GPU devices, _packed_ mode fills one GPU fully before moving to next, and _none_ selects first available device from kubelet. Default is _none_. |
 | -sriov-report | string | vfs | Which SR-IOV GPU functions to advertise: `vfs` (default; skip PF when VFs exist), `pf` (skip VFs, advertise PF), `all` (advertise PF and VFs). Does not change host VF configuration. |
 | -bypath | string | single | 3 possible values: single, none, all. Default is single. Changes how the by-path symlinks are handled by the plugin. More [info](#by-path-mounting). |
+| -hami | - | disabled | Advertise discrete GPUs as `intel.com/vgpu` for the HAMi scheduler. See [HAMi mode](#hami-mode) |
+| -vxpu-lib | string | /usr/local/share/vxpu/libvxpu.so | libvxpu inside the plugin image (HAMi mode) |
+| -vxpu-host-dir | string | /usr/local/vxpu | Host directory for libvxpu and the per-container ledgers (HAMi mode) |
+| -vxpu-log-level | string | "" | `LIBCUDA_LOG_LEVEL` for containers using libvxpu (HAMi mode) |
 
 The plugin also accepts a number of other arguments (common to all plugins) related to logging.
 Please use the -h option to see the complete list of logging related options.
@@ -223,6 +227,32 @@ GPU plugin does __not__ setup SR-IOV. It has to be configured by the cluster adm
 GPU plugin does however support provisioning Virtual Functions (VFs) to containers for a SR-IOV enabled GPU. By default (`-sriov-report=vfs`), when the plugin detects a GPU with SR-IOV VFs configured, it will only provision the VFs and leaves the PF device on the host.
 
 To keep host VFs enabled but advertise only the physical function to Kubernetes (for example so pods always get the same PF `renderD*` node), set `-sriov-report=pf`. Use `-sriov-report=all` to advertise both PF and VFs.
+
+### HAMi mode
+
+With `-hami`, discrete GPUs are scheduled by [HAMi](https://github.com/beclab/HAMi) instead of
+being handed out as `gpu.intel.com/xe` or `gpu.intel.com/i915`; integrated GPUs keep those resources.
+Each discrete card is advertised `-shared-dev-num` times as `intel.com/vgpu`, and the plugin:
+
+- publishes the cards on the node as `hami.io/node-intel-register` (HAMi register format, device ID
+  `intel-<node hash>-<PCI address>`) with the handshake `hami.io/node-handshake-intel`, plus
+  `gpu.bytetrade.io/node-intel-cards` (JSON: card, PCI address and supported share modes per ID).
+  A card without `sharemode.gpu.bytetrade.io/<id>` gets `0` (Exclusive);
+- installs libvxpu from `-vxpu-lib` into `-vxpu-host-dir` at start. Without it the cards only offer
+  Exclusive;
+- in Allocate, takes the cards HAMi chose from `hami.io/intel-vgpu-devices-to-allocate` instead of
+  the device IDs kubelet passed, mounts libvxpu with `/etc/ld.so.preload`, pins the container to its
+  cards (`VXPU_DEVICE_PCI_<i>`), sets `CUDA_DEVICE_MEMORY_LIMIT_<i>` for a memory slice (the memory
+  HAMi booked minus the per-container reserve it recorded in
+  `gpu.bytetrade.io/vxpu-memory-reserve`), and keeps
+  the container's ledger in `<vxpu-host-dir>/containers/<pod UID>_<container>`. A container setting
+  `CUDA_DISABLE_CONTROL=true` gets no preload. A container that also requests `nvidia.com/gpu` is
+  rejected.
+
+The DaemonSet has to provide the `NODE_NAME` env, mount `-vxpu-host-dir` from the host at the same
+path, and run with a service account that may get and patch nodes, and get, list and patch pods.
+The image is built with `--build-arg VXPU_BUILDER=beclab/vxpu_builder:<tag>`, the HAMi-core
+builder image the library is copied from.
 
 ### CDI support
 
